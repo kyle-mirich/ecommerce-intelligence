@@ -28,40 +28,25 @@ def render_header():
     """, unsafe_allow_html=True)
 
 def render_sidebar():
-    """Renders the configuration sidebar and returns settings."""
+    """Renders the sidebar with information."""
     with st.sidebar:
-        st.title("⚙️ Configuration")
-        
-        # API Key Status
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if api_key:
-            st.success("✅ API Key Loaded")
-        else:
-            st.error("❌ API Key Missing")
-            st.info("Please set GOOGLE_API_KEY in .env file")
-            
-        st.divider()
-        
-        # Model Settings
-        st.subheader("Model Settings")
-        model_name = st.selectbox(
-            "Model",
-            ["google_genai:gemini-2.5-flash-lite", "google_genai:gemini-1.5-flash"],
-            index=0
-        )
-        temperature = st.slider("Temperature", 0.0, 1.0, 0.7)
-        
-        st.divider()
         st.markdown("### About")
         st.markdown("""
         **Metadata Vision Agent** extracts structured product data from:
         - 🖼️ Images
         - 🔗 URLs
         - 📝 Text
-        
+
         Powered by **LangChain v1** & **Google Gemini**.
         """)
-        
+
+        # Get API key from environment (no status display)
+        api_key = os.getenv("GOOGLE_API_KEY")
+
+        # Use default settings (hidden from user)
+        model_name = "google_genai:gemini-2.5-flash-lite"
+        temperature = 0.7
+
         return api_key, model_name, temperature
 
 def display_results(metadata):

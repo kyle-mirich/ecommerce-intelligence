@@ -353,10 +353,10 @@ Your job is to extract accurate, structured metadata from product inputs (images
 4. Clean and normalize data using cleaner_tool
 5. **CRITICAL: Always use schema_validator_tool before finalizing**
 6. If validation fails, correct the issues and validate again
-7. Return structured JSON with: title, brand, category, color, material, dimensions, description, and confidence_score (0.0-1.0)
+7. Calculate confidence_score based on extraction completeness
+8. Return structured output in the ProductMetadata schema format
 
 **Quality Rules:**
-- Always extract at minimum the product title (REQUIRED)
 - Always extract at minimum the product title (REQUIRED)
 - Generate a 'description' that reads like a professional e-commerce product page. It MUST explicitly detail the visual attributes (e.g., 'Red upper with white sole' instead of just 'Red'), and naturally weave in the product title, brand, and category. The tone should be engaging and descriptive.
 - Use vision_extractor_tool for image inputs
@@ -364,10 +364,22 @@ Your job is to extract accurate, structured metadata from product inputs (images
 - Never fabricate information - if unsure, leave field as null or use appropriate qualifier
 - Use cleaner_tool to normalize colors, materials, and dimensions
 - Self-validate for hallucinations, missing fields, and inconsistencies
-- Calculate confidence_score (0.0 to 1.0) based on how many fields were successfully extracted and validated. THIS IS REQUIRED.
 - Only return final answer after schema_validator_tool confirms validation PASSED
 
-Return ONLY the final JSON metadata when complete and validated."""
+**CRITICAL - Confidence Score Calculation:**
+You MUST calculate confidence_score (0.0 to 1.0) based on this formula:
+- Start with 0.0
+- Add 0.20 for each field successfully extracted: brand, category, color, material, dimensions
+- Title is REQUIRED, so it doesn't add to confidence
+- Maximum score is 1.0 (all 5 optional fields extracted)
+
+Examples:
+- Only title extracted: confidence_score = 0.0
+- Title + brand + color: confidence_score = 0.4
+- Title + brand + category + color + material: confidence_score = 0.8
+- All fields extracted: confidence_score = 1.0
+
+You MUST include the confidence_score field in your final output. This is NON-NEGOTIABLE."""
         
         # Create agent
         # Pass schema directly - LangChain auto-selects ProviderStrategy for Gemini
@@ -419,48 +431,61 @@ Return ONLY the final JSON metadata when complete and validated."""
         )
         
         # Try to extract structured response (multiple methods)
-        
+        result = None
+
         # Method 1: Check for structured_response key
         if "structured_response" in response:
             metadata = response["structured_response"]
             if hasattr(metadata, "__dataclass_fields__"):
                 from dataclasses import asdict
-                return asdict(metadata)
-            return metadata
-        
+                result = asdict(metadata)
+            else:
+                result = metadata
+
         # Method 2: Check for response_format output
-        if "output" in response:
+        elif "output" in response:
             output = response["output"]
             if isinstance(output, dict):
-                return output
-            if hasattr(output, "__dataclass_fields__"):
+                result = output
+            elif hasattr(output, "__dataclass_fields__"):
                 from dataclasses import asdict
-                return asdict(output)
-        
+                result = asdict(output)
+
         # Method 3: Try to parse JSON from the last message
-        messages = response.get("messages", [])
-        if messages:
-            last_message = messages[-1]
-            if hasattr(last_message, "content"):
-                content = last_message.content
-                
-                # Try to extract JSON from content
-                import json
-                import re
-                
-                # Look for JSON in the response
-                json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content, re.DOTALL)
-                if json_match:
-                    try:
-                        parsed = json.loads(json_match.group(0))
-                        return parsed
-                    except json.JSONDecodeError:
-                        pass
-                
-                # If no JSON found, return raw response
-                return {"raw_response": content}
-        
-        return {"error": "Failed to extract metadata"}
+        if not result:
+            messages = response.get("messages", [])
+            if messages:
+                last_message = messages[-1]
+                if hasattr(last_message, "content"):
+                    content = last_message.content
+
+                    # Try to extract JSON from content
+                    import json
+                    import re
+
+                    # Look for JSON in the response
+                    json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', content, re.DOTALL)
+                    if json_match:
+                        try:
+                            result = json.loads(json_match.group(0))
+                        except json.JSONDecodeError:
+                            pass
+
+                    # If no JSON found, return raw response
+                    if not result:
+                        result = {"raw_response": content}
+
+        if not result:
+            return {"error": "Failed to extract metadata"}
+
+        # FALLBACK: Calculate confidence_score if missing or 0.0
+        if "confidence_score" not in result or result.get("confidence_score", 0.0) == 0.0:
+            # Calculate based on how many optional fields are present
+            optional_fields = ["brand", "category", "color", "material", "dimensions"]
+            filled_fields = sum(1 for field in optional_fields if result.get(field))
+            result["confidence_score"] = round(filled_fields * 0.20, 2)
+
+        return result
 
 
 # ============================================================================
@@ -470,8 +495,8 @@ Return ONLY the final JSON metadata when complete and validated."""
 def extract_metadata(
     input_data: Any,
     input_type: Literal["image", "url", "text"] = "image",
-    model_name: str = "google_genai:gemini-2.5-flash-lite",
-    temperature: float = 0.7,
+    model_name: str = "google_genai:gemini-2.5-flash",
+    temperature: float = 0.2,
     max_tokens: int = 1024
 ) -> Dict:
     """
